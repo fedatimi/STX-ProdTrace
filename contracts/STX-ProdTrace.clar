@@ -105,3 +105,118 @@
     false
   )
 )
+
+
+(define-private (safe-get-role (address principal))
+  (default-to 
+    { role: u"", is-active: false }
+    (map-get? roles address)
+  )
+)
+
+(define-public (assign-role (address principal) (new-role (string-utf8 20)))
+  (let ((current-role (safe-get-role address)))
+    (begin
+      (asserts! (is-contract-owner) ERR-NOT-AUTHORIZED)
+      (asserts! (is-valid-role new-role) ERR-INVALID-INPUT)
+      (asserts! (not (get is-active current-role)) ERR-ALREADY-EXISTS)
+      (ok (map-set roles address { 
+        role: new-role, 
+        is-active: true 
+      }))
+    )
+  )
+)
+
+(define-public (revoke-role (address principal))
+  (let ((current-role (safe-get-role address)))
+    (begin
+      (asserts! (is-contract-owner) ERR-NOT-AUTHORIZED)
+      (asserts! (get is-active current-role) ERR-NOT-FOUND)
+      (ok (map-set roles address { 
+        role: u"", 
+        is-active: false 
+      }))
+    )
+  )
+)
+
+(define-private (safe-get-product (product-id uint))
+  (map-get? products product-id)
+)
+
+(define-public (add-product 
+    (name (string-utf8 100)) 
+    (origin (string-utf8 50)) 
+    (location (string-utf8 100)))
+  (let 
+    (
+      (safe-id (var-get product-counter))
+      (existing-product (safe-get-product safe-id))
+      (validated-strings (validate-strings name origin location))
+    )
+    (begin
+      (asserts! (check-role tx-sender MANUFACTURER) ERR-NOT-AUTHORIZED)
+      (asserts! validated-strings ERR-INVALID-INPUT)
+      (asserts! (is-none existing-product) ERR-ALREADY-EXISTS)
+      (map-set products safe-id
+        {
+          id: safe-id,
+          name: name,
+          manufacturer: tx-sender,
+          origin: origin,
+          timestamp: stacks-block-height,
+          current-location: location,
+          status: u"created"
+        })
+      (var-set product-counter (+ safe-id u1))
+      (ok safe-id)
+    )
+  )
+)
+
+;; Update location and add history entry
+(define-public (update-location 
+    (product-id uint) 
+    (new-location (string-utf8 100)))
+  (let (
+      (product (safe-get-product product-id))
+      (valid-location (is-valid-string-length new-location MAX-STRING-LENGTH-100))
+      (change-id (var-get change-counter))
+    )
+    (begin
+      (asserts! (or 
+        (check-role tx-sender TRANSPORTER)
+        (check-role tx-sender MANUFACTURER)) ERR-NOT-AUTHORIZED)
+      (asserts! valid-location ERR-INVALID-INPUT)
+      (asserts! (is-some product) ERR-NOT-FOUND)
+      ;; Update the product with the new location
+      (map-set products product-id
+        (merge (unwrap! product ERR-NOT-FOUND)
+          { current-location: new-location }))
+      ;; Add a new entry to the product history
+      (map-set product-history {product-id: product-id, change-id: change-id}
+        {
+          timestamp: stacks-block-height,
+          location: new-location,
+          status: (get status (unwrap! product ERR-NOT-FOUND))
+        })
+      ;; Increment the change counter
+      (var-set change-counter (+ change-id u1))
+      (ok change-id)
+    )
+  )
+)
+
+;; New function to get the product's history
+(define-read-only (get-product-history (product-id uint))
+  (map-get? product-history {product-id: product-id, change-id: u0})
+)
+
+(define-read-only (get-product (product-id uint))
+  (safe-get-product product-id)
+)
+
+(define-read-only (get-role (address principal))
+  (safe-get-role address)
+)
